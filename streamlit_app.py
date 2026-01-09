@@ -370,8 +370,8 @@ if not top_items.empty:
         <style>
         .card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
         .card {
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: #262730;
+            border: 1px solid #3d3d3d;
             border-radius: 14px;
             padding: 16px;
             min-height: 140px;
@@ -404,8 +404,8 @@ if not top_items.empty:
         ".card { flex: 0 0 calc((100% - 32px) / 3); box-sizing: border-box; }",
         "@media (max-width: 900px) { .card { flex: 0 0 100%; } }",
         ".card {",
-        "  background: rgba(255, 255, 255, 0.04);",
-        "  border: 1px solid rgba(255, 255, 255, 0.08);",
+        "  background: #262730;",
+        "  border: 1px solid #3d3d3d;",
         "  border-radius: 14px;",
         "  padding: 16px;",
         "  min-height: 140px;",
