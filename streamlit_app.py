@@ -54,6 +54,8 @@ def load_catalog_and_prices(encoder_classes):
                 "transaction_date",
                 "transaction_time",
                 "transaction_qty",
+                "store_id",
+                "store_location",
                 "product_category",
                 "product_type",
                 "product_detail",
@@ -63,29 +65,31 @@ def load_catalog_and_prices(encoder_classes):
         df = df.dropna()
         logger.info(f"Loaded {len(df)} transactions from dataset")
 
-        catalog = df[["product_category", "product_type", "product_detail"]].drop_duplicates()
+        catalog = df[
+            ["product_category", "product_type", "product_detail", "store_id", "store_location"]
+        ].drop_duplicates()
         
         # Calculate actual prices per product detail (IMPROVEMENT #2)
         price_by_detail = df.groupby("product_detail")["unit_price"].median().to_dict()
         price_by_type = df.groupby("product_type")["unit_price"].median().to_dict()
         overall_median = float(df["unit_price"].median())
 
-        # Parse time
-        time_parsed = pd.to_datetime(
-            df["transaction_time"].astype(str),
+        # Parse date and time
+        df["transaction_date"] = pd.to_datetime(df["transaction_date"])
+        df["transaction_time"] = pd.to_datetime(
+            df["transaction_time"],
             format="%H:%M:%S",
             errors="coerce",
         )
-        df["hour"] = time_parsed.dt.hour
+
+        # Extract time-based features (aligned with training)
+        df["hour"] = df["transaction_time"].dt.hour
+        df["day_of_week"] = df["transaction_date"].dt.dayofweek
+        df["month"] = df["transaction_date"].dt.month
+
         hours = df["hour"]
         min_hour = int(hours.min()) if hours.notna().any() else 0
         max_hour = int(hours.max()) if hours.notna().any() else 23
-
-        # Parse date for historical trends
-        df["transaction_date"] = pd.to_datetime(df["transaction_date"])
-        df["day_of_week"] = df["transaction_date"].dt.dayofweek
-        df["month"] = df["transaction_date"].dt.month
-        df["week"] = df["transaction_date"].dt.isocalendar().week
 
         price_map_encoded = {}
         for encoded, name in enumerate(encoder_classes):
@@ -113,40 +117,12 @@ def load_catalog_and_prices(encoder_classes):
 
 
 def build_time_features(dt):
-    """Build time-based features from datetime (12 features for improved model)"""
+    """Build time-based features from datetime (aligned with training)"""
     hour = dt.hour
     day_of_week = dt.weekday()
     month = dt.month
-    day_of_month = dt.day
-    weekend = 1 if day_of_week >= 5 else 0
-    
-    # Quarter
-    quarter = (month - 1) // 3 + 1
-    
-    # Season (1=Winter, 2=Spring, 3=Summer, 4=Fall)
-    if month in [12, 1, 2]:
-        season = 1
-    elif month in [3, 4, 5]:
-        season = 2
-    elif month in [6, 7, 8]:
-        season = 3
-    else:
-        season = 4
-    
-    # Month start/end indicators
-    is_month_start = 1 if day_of_month <= 7 else 0
-    is_month_end = 1 if day_of_month >= 24 else 0
-    
-    # Holiday detection (simplified for US holidays)
-    date_str = dt.strftime('%Y-%m-%d')
-    us_holidays_2023 = ['2023-01-01', '2023-07-04', '2023-11-23', '2023-12-25']
-    us_holidays_2024 = ['2024-01-01', '2024-07-04', '2024-11-28', '2024-12-25']
-    us_holidays_2025 = ['2025-01-01', '2025-07-04', '2025-11-27', '2025-12-25']
-    us_holidays_2026 = ['2026-01-01', '2026-07-04', '2026-11-26', '2026-12-25']
-    all_holidays = us_holidays_2023 + us_holidays_2024 + us_holidays_2025 + us_holidays_2026
-    is_holiday = 1 if date_str in all_holidays else 0
-    
-    return hour, day_of_week, month, weekend, day_of_month, quarter, season, is_month_start, is_month_end, is_holiday
+
+    return hour, day_of_week, month
 
 
 def predict_qty(model, X):
@@ -182,24 +158,22 @@ def predict_qty_with_interval(model, X, confidence=0.80):
     return pred, lower, upper
 
 
-def make_feature_frame(hour, day_of_week, month, weekend, product_type_encoded, unit_price, 
-                       day_of_month, quarter, season, is_month_start, is_month_end, is_holiday):
-    """Create feature DataFrame for prediction with all 12 features"""
+def make_feature_frame(
+    hour,
+    day_of_week,
+    month,
+    product_type_encoded,
+    unit_price,
+):
+    """Create feature DataFrame for prediction with aligned features"""
     return pd.DataFrame(
         [
             {
                 "hour": hour,
                 "day_of_week": day_of_week,
                 "month": month,
-                "weekend": weekend,
                 "product_type_encoded": product_type_encoded,
                 "unit_price": unit_price,
-                "day_of_month": day_of_month,
-                "quarter": quarter,
-                "season": season,
-                "is_month_start": is_month_start,
-                "is_month_end": is_month_end,
-                "is_holiday": is_holiday,
             }
         ]
     )
@@ -207,7 +181,7 @@ def make_feature_frame(hour, day_of_week, month, weekend, product_type_encoded, 
 
 def make_prediction_table(model, encoder, dt, price_map, overall_median):
     """Make prediction table for all product types"""
-    hour, day_of_week, month, weekend = build_time_features(dt)
+    hour, day_of_week, month = build_time_features(dt)
     rows = []
     for encoded, name in enumerate(encoder.classes_):
         unit_price = float(overall_median)
@@ -216,7 +190,6 @@ def make_prediction_table(model, encoder, dt, price_map, overall_median):
                 "hour": hour,
                 "day_of_week": day_of_week,
                 "month": month,
-                "weekend": weekend,
                 "product_type_encoded": encoded,
                 "unit_price": unit_price,
                 "product_type": name,
@@ -228,7 +201,6 @@ def make_prediction_table(model, encoder, dt, price_map, overall_median):
         "hour",
         "day_of_week",
         "month",
-        "weekend",
         "product_type_encoded",
         "unit_price",
     ]
@@ -245,7 +217,7 @@ def make_prediction_table_by_detail(
     overall_median,
 ):
     """Make prediction table by product detail"""
-    hour, day_of_week, month, weekend = build_time_features(dt)
+    hour, day_of_week, month = build_time_features(dt)
     rows = []
     for row in catalog.itertuples(index=False):
         product_type = row.product_type
@@ -257,7 +229,6 @@ def make_prediction_table_by_detail(
                 "hour": hour,
                 "day_of_week": day_of_week,
                 "month": month,
-                "weekend": weekend,
                 "product_type_encoded": type_to_encoded[product_type],
                 "unit_price": unit_price,
                 "product_category": row.product_category,
@@ -274,7 +245,6 @@ def make_prediction_table_by_detail(
         "hour",
         "day_of_week",
         "month",
-        "weekend",
         "product_type_encoded",
         "unit_price",
     ]
@@ -525,18 +495,39 @@ with est_tab:
             (range_start, range_end),
         )
     with col2:
-        categories = sorted(catalog["product_category"].unique())
+        store_map = (
+            sales_df[["store_location", "store_id"]]
+            .drop_duplicates()
+            .set_index("store_location")["store_id"]
+            .to_dict()
+        )
+        locations = sorted(store_map.keys())
+        selected_location = st.selectbox("Lokasi Toko", locations)
+        selected_store_id = store_map[selected_location]
+
+        catalog_filtered = (
+            sales_df.loc[
+                sales_df["store_location"] == selected_location,
+                ["product_category", "product_type", "product_detail"],
+            ]
+            .drop_duplicates()
+        )
+
+        categories = sorted(catalog_filtered["product_category"].unique())
         product_category = st.selectbox("Kategori Produk", categories)
 
         types = sorted(
-            catalog.loc[catalog["product_category"] == product_category, "product_type"].unique()
+            catalog_filtered.loc[
+                catalog_filtered["product_category"] == product_category,
+                "product_type",
+            ].unique()
         )
         product_type = st.selectbox("Tipe Produk", types)
 
         details = sorted(
-            catalog.loc[
-                (catalog["product_category"] == product_category)
-                & (catalog["product_type"] == product_type),
+            catalog_filtered.loc[
+                (catalog_filtered["product_category"] == product_category)
+                & (catalog_filtered["product_type"] == product_type),
                 "product_detail",
             ].unique()
         )
@@ -553,21 +544,15 @@ with est_tab:
     rows = []
     for hour in hours:
         dt = datetime.combine(est_date, time(hour, 0))
-        h, day_of_week, month, weekend, day_of_month, quarter, season, is_month_start, is_month_end, is_holiday = build_time_features(dt)
+        h, day_of_week, month = build_time_features(dt)
         rows.append(
             {
                 "hour": h,
                 "day_of_week": day_of_week,
                 "month": month,
-                "weekend": weekend,
                 "product_type_encoded": product_encoded,
                 "unit_price": unit_price,
-                "day_of_month": day_of_month,
-                "quarter": quarter,
-                "season": season,
-                "is_month_start": is_month_start,
-                "is_month_end": is_month_end,
-                "is_holiday": is_holiday,
+                "store_id": selected_store_id,
             }
         )
 
@@ -576,15 +561,9 @@ with est_tab:
         "hour",
         "day_of_week",
         "month",
-        "weekend",
         "product_type_encoded",
         "unit_price",
-        "day_of_month",
-        "quarter",
-        "season",
-        "is_month_start",
-        "is_month_end",
-        "is_holiday",
+        "store_id",
     ]
     
     # Get predictions with confidence interval (IMPROVEMENT #3)
@@ -602,12 +581,18 @@ with est_tab:
     total_upper_cups = int(round(total_upper))
     avg_pred_cups = int(round(avg_pred))
     unit_label = unit_label_for_category(product_category)
+    est_revenue = total_pred_cups * unit_price
     
     # Display prediction
     st.metric(
         "🎯 Estimasi Terjual", 
         f"{total_pred_cups} {unit_label}",
         help=f"Prediksi untuk {product_detail}"
+    )
+    st.metric(
+        "💰 Estimasi Pendapatan",
+        f"${est_revenue:,.2f}",
+        help=f"Perkiraan pendapatan untuk {product_detail}"
     )
 
 # ============================================================================
